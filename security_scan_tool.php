@@ -52,22 +52,25 @@ function checkFileForVulnerabilities($filePath) {
     return $vulnerabilities;
 }
 
-// واجهة المستخدم لعرض الملفات ونتائج الفحص
-$directories = getDirectories(__DIR__);
-$results = [];
-$selectedDirectory = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($_POST['action'] === 'scan_directory') {
+        $selectedDirectory = $_POST['scan_directory'];
+        $files = getFiles($selectedDirectory);
+        header('Content-Type: application/json');
+        echo json_encode(['files' => $files]);
+        exit;
+    }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scan_directory'])) {
-    $selectedDirectory = $_POST['scan_directory'];
-    $files = getFiles($selectedDirectory);
-
-    foreach ($files as $file) {
-        $vulnerabilities = checkFileForVulnerabilities($file);
-        if (!empty($vulnerabilities)) {
-            $results[$file] = $vulnerabilities;
-        }
+    if ($_POST['action'] === 'scan_file') {
+        $filePath = $_POST['file_path'];
+        $vulnerabilities = checkFileForVulnerabilities($filePath);
+        header('Content-Type: application/json');
+        echo json_encode(['file' => $filePath, 'vulnerabilities' => $vulnerabilities]);
+        exit;
     }
 }
+
+$directories = getDirectories(__DIR__);
 ?>
 
 <!DOCTYPE html>
@@ -80,7 +83,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scan_directory'])) {
     <link href="https://fonts.googleapis.com/css2?family=Cairo&display=swap" rel="stylesheet">
     <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
             font-family: 'Cairo', sans-serif;
@@ -94,13 +96,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scan_directory'])) {
 <body dir="rtl">
     <div class="container mt-5">
         <h2 class="text-center">أداة فحص الثغرات الأمنية في الملفات</h2>
-        <form method="POST" class="my-4">
+        <form id="scanForm" class="my-4">
             <div class="form-group">
                 <label for="scan_directory">حدد المجلد المراد فحصه:</label>
                 <select id="scan_directory" name="scan_directory" class="form-control" required>
                     <option value="">اختر المجلد</option>
                     <?php foreach ($directories as $directory): ?>
-                        <option value="<?= htmlspecialchars($directory) ?>" <?= ($selectedDirectory === $directory) ? 'selected' : '' ?>>
+                        <option value="<?= htmlspecialchars($directory) ?>">
                             <?= htmlspecialchars(basename($directory)) ?>
                         </option>
                     <?php endforeach; ?>
@@ -109,22 +111,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scan_directory'])) {
             <button type="submit" class="btn btn-primary">فحص المجلد</button>
         </form>
 
-        <?php if (isset($results) && !empty($results)): ?>
-            <h3 class="mt-5">نتائج الفحص:</h3>
-            <div class="progress mb-4">
-                <div id="progress-bar" class="progress-bar bg-success" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-            </div>
-            <div class="list-group">
-                <?php foreach ($results as $file => $vulnerabilities): ?>
-                    <div class="list-group-item">
-                        <strong>الملف:</strong> <?= htmlspecialchars($file) ?><br>
-                        <?php foreach ($vulnerabilities as $vulnerability): ?>
-                            <span class="text-danger">- <?= htmlspecialchars($vulnerability) ?></span><br>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        <?php endif; ?>
+        <h3 class="mt-5">التقدم في الفحص:</h3>
+        <div class="progress mb-4">
+            <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+        <div id="results" class="mt-4"></div>
     </div>
 
     <footer class="text-center mt-5">
@@ -133,21 +124,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['scan_directory'])) {
 
     <script>
         $(document).ready(function() {
-            <?php if (isset($results) && !empty($results)): ?>
-                var progressBar = $('#progress-bar');
-                var totalFiles = <?= count($results) ?>;
-                var processedFiles = 0;
+            $('#scanForm').on('submit', function(e) {
+                e.preventDefault();
+                $('#progress-bar').css('width', '0%').attr('aria-valuenow', 0);
+                $('#results').html('');
+                var directory = $('#scan_directory').val();
+                if (directory) {
+                    $.ajax({
+                        url: '',
+                        method: 'POST',
+                        data: {
+                            action: 'scan_directory',
+                            scan_directory: directory
+                        },
+                        success: function(response) {
+                            var files = response.files;
+                            var totalFiles = files.length;
+                            var processedFiles = 0;
 
-                progressBar.css('width', '0%');
-                progressBar.attr('aria-valuenow', 0);
+                            function scanNextFile() {
+                                if (processedFiles < totalFiles) {
+                                    var file = files[processedFiles];
+                                    $.ajax({
+                                        url: '',
+                                        method: 'POST',
+                                        data: {
+                                            action: 'scan_file',
+                                            file_path: file
+                                        },
+                                        success: function(fileResponse) {
+                                            processedFiles++;
+                                            var progress = Math.round((processedFiles / totalFiles) * 100);
+                                            $('#progress-bar').css('width', progress + '%').attr('aria-valuenow', progress);
 
-                <?php foreach ($results as $file => $vulnerabilities): ?>
-                    processedFiles++;
-                    var progress = Math.round((processedFiles / totalFiles) * 100);
-                    progressBar.css('width', progress + '%');
-                    progressBar.attr('aria-valuenow', progress);
-                <?php endforeach; ?>
-            <?php endif; ?>
+                                            if (fileResponse.vulnerabilities.length > 0) {
+                                                var resultHtml = '<div class="list-group-item">';
+                                                resultHtml += '<strong>الملف:</strong> ' + fileResponse.file + '<br>';
+                                                $.each(fileResponse.vulnerabilities, function(i, vulnerability) {
+                                                    resultHtml += '<span class="text-danger">- ' + vulnerability + '</span><br>';
+                                                });
+                                                resultHtml += '</div>';
+                                                $('#results').append(resultHtml);
+                                            }
+                                            setTimeout(scanNextFile, 500); // تأخير بمقدار 500 مللي ثانية بين كل عملية فحص لتقليل استهلاك المعالج
+                                        }
+                                    });
+                                }
+                            }
+
+                            scanNextFile();
+                        }
+                    });
+                }
+            });
         });
     </script>
 </body>
